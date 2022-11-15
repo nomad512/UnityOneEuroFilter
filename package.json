@@ -1,0 +1,14 @@
+{
+  "author": "Damon Chandler",
+  "description": "An implementation of the One Euro Filter for Unity.",
+  "displayName": "Nomad.OneEuroFilter",
+  "keywords": [
+    "unity"
+  ],
+  "license": "MIT",
+  "name": "com.nomad.one-euro-filter",
+  "repository": "github:nomad512/UnityOneEuroFilter",
+  "unity": "2019.2",
+  "unityRelease": "0f1",
+  "version": "0.3.1"
+}
