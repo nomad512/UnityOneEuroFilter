@@ -5,6 +5,8 @@
  * Based on the 1€ filter by Géry Casiez (http://www.lifl.fr/~casiez/1euro/)
  * and the C# implementation by Dario Mazzanti (https://github.com/DarioMazzanti/OneEuroFilterUnity)
  * and the C++ implementation by Nicolas Roussel (http://www.lifl.fr/~casiez/1euro/OneEuroFilter.cc)
+ * with understanding aided by Jaan Tollander de Balsch (https://jaantollander.com/post/noise-filtering-using-one-euro-filter/)
+ * 
  */
 
 namespace Nomad
@@ -13,9 +15,9 @@ namespace Nomad
 	using UnityEngine;
 
 	[Serializable]
-	public struct OneEuroFilterParameters
+	public struct OneEuroParameters
 	{
-		public static readonly OneEuroFilterParameters Default = new OneEuroFilterParameters()
+		public static readonly OneEuroParameters Default = new OneEuroParameters()
 		{
 			Frequency = 120f,
 			MinCutoff = 1f,
@@ -29,43 +31,44 @@ namespace Nomad
 		public float DerivativeCutoff;
 	}
 
+	[Serializable]
 	public abstract class OneEuroFilterBase<T> where T : struct
 	{
-		protected T _currentOutput;
-		protected T _previousOutput;
+		[SerializeField]
+		private OneEuroParameters _parameters = OneEuroParameters.Default;
+
+		private T _currentOutput;
 
 		public ref readonly T CurrentOutput => ref _currentOutput;
-		public ref readonly T PreviousOutput => ref _previousOutput;
 		protected abstract int _dimensions { get; }
-		protected float[] _buffer;
-		internal readonly OneEuroFilter[] _filters;
+		protected  const int foo = 1;
+		private float[] _buffer;
+		private float? _lastTime;
+		internal readonly OneEuroFilterInternal[] _filters;
 
-		public OneEuroFilterBase(in OneEuroFilterParameters parameters)
+		protected OneEuroFilterBase()
 		{
 			_buffer = new float[_dimensions];
-			_filters = new OneEuroFilter[_dimensions];
-			for (int i = 0; i < _dimensions; i++)
+			_filters = new OneEuroFilterInternal[_dimensions];
+			for (var i = 0; i < _dimensions; i++)
 			{
-				_filters[i] = new OneEuroFilter(parameters);
+				_filters[i] = new OneEuroFilterInternal(_parameters);
 			}
 		}
 
-		public void UpdateParameters(in OneEuroFilterParameters parameters)
+		public T Filter(in T input, float? timestamp = null) // TODO: calculate alpha once and pass to dimensional filters
 		{
-			for (int i = 0; i < _filters.Length; i++)
+			// Calculate sampling frequency based on timestamps.
+			if (_lastTime.HasValue && timestamp.HasValue)
 			{
-				_filters[i].UpdateParameters(parameters);
+				_parameters.Frequency = 1.0f / (timestamp.Value - _lastTime.Value);
 			}
-		}
-
-		public T Filter(in T input, float? timestamp = null)
-		{
-			_previousOutput = _currentOutput;
+			_lastTime = timestamp;
 
 			Decompose(input, ref _buffer);
 			for (int i = 0; i < _dimensions; i++)
 			{
-				_buffer[i] = _filters[i].Filter(_buffer[i], timestamp);
+				_buffer[i] = _filters[i].Filter(_buffer[i], _parameters);
 			}
 			Recompose(_buffer, ref _currentOutput);
 
@@ -76,12 +79,10 @@ namespace Nomad
 		protected abstract void Recompose(in float[] buffer, ref T output);
 	}
 
+	[Serializable]
 	public class OneEuroFilterFloat : OneEuroFilterBase<float>
 	{
-		protected override int _dimensions => 1;
-
-		public OneEuroFilterFloat(in OneEuroFilterParameters parameters) : base(parameters) { }
-
+		protected override int _dimensions => 1;		
 		protected override void Decompose(in float input, ref float[] buffer)
 		{
 			buffer[0] = input;
@@ -92,12 +93,10 @@ namespace Nomad
 		}
 	}
 
+	[Serializable]
 	public class OneEuroFilterVector2 : OneEuroFilterBase<Vector2>
 	{
 		protected override int _dimensions => 2;
-
-		public OneEuroFilterVector2(in OneEuroFilterParameters parameters) : base(parameters) { }
-
 		protected override void Decompose(in Vector2 input, ref float[] buffer)
 		{
 			buffer[0] = input.x;
@@ -110,11 +109,10 @@ namespace Nomad
 		}
 	}
 
+	[Serializable]
 	public class OneEuroFilterVector3 : OneEuroFilterBase<Vector3>
 	{
 		protected override int _dimensions => 3;
-
-		public OneEuroFilterVector3(in OneEuroFilterParameters parameters) : base(parameters) { }
 
 		protected override void Decompose(in Vector3 input, ref float[] buffer)
 		{
@@ -130,11 +128,10 @@ namespace Nomad
 		}
 	}
 
+	[Serializable]
 	public class OneEuroFilterVector4 : OneEuroFilterBase<Vector4>
 	{
 		protected override int _dimensions => 4;
-
-		public OneEuroFilterVector4(in OneEuroFilterParameters parameters) : base(parameters) { }
 
 		protected override void Decompose(in Vector4 input, ref float[] buffer)
 		{
@@ -152,11 +149,10 @@ namespace Nomad
 		}
 	}
 
+	[Serializable]
 	public class OneEuroFilterQuaternion : OneEuroFilterBase<Quaternion>
 	{
 		protected override int _dimensions => 4;
-
-		public OneEuroFilterQuaternion(in OneEuroFilterParameters parameters) : base(parameters) { }
 
 		protected override void Decompose(in Quaternion input, ref float[] buffer)
 		{
@@ -189,22 +185,22 @@ namespace Nomad
 
 	internal class LowPassFilter
 	{
-		private float _lastInput;
 		private float _alpha;
 		private float _lastOutput;
 
 		public bool IsInitialized { get; private set; }
-		public float LastInput => _lastInput;
+		public float LastInput { get; private set; }
 
-		public LowPassFilter(float alpha, float initialValue = 0.0f)
+		public LowPassFilter(float alpha = 1f, float initialValue = 0.0f)
 		{
-			_lastInput = _lastOutput = initialValue;
+			LastInput = _lastOutput = initialValue;
 			SetAlpha(alpha);
 			IsInitialized = false;
 		}
 
-		public float Filter(float value)
+		public float Filter(float value, float alpha)
 		{
+			SetAlpha(alpha);
 			float result;
 			if (IsInitialized)
 			{
@@ -215,15 +211,9 @@ namespace Nomad
 				result = value;
 				IsInitialized = true;
 			}
-			_lastInput = value;
+			LastInput = value;
 			_lastOutput = result;
 			return result;
-		}
-
-		public float FilterWithAlpha(float value, float alpha)
-		{
-			SetAlpha(alpha);
-			return Filter(value);
 		}
 
 		public void SetAlpha(float alpha)
@@ -242,90 +232,46 @@ namespace Nomad
 		}
 	};
 
-	internal class OneEuroFilter
+	internal class OneEuroFilterInternal
 	{
-		protected OneEuroFilterParameters _parameters = OneEuroFilterParameters.Default;
-		internal readonly LowPassFilter _x;
-		internal readonly LowPassFilter _dx;
-		protected float? _lastTime;
+		private readonly LowPassFilter _x;
+		private readonly LowPassFilter _dx;
+		private float? _lastTime;
 
 		/// <summary>
 		/// The latest filtered value.
 		/// </summary>
-		public float CurrentOutput { get; protected set; }
-		/// <summary>
-		/// The second-latest filtered value.
-		/// </summary>
-		public float PreviousOutput { get; protected set; }
-		protected ref float _freq => ref _parameters.Frequency;
-		protected ref float _minCutoff => ref _parameters.MinCutoff;
-		protected ref float _b => ref _parameters.Beta;
-		protected ref float _derCutoff => ref _parameters.DerivativeCutoff;
+		public float CurrentOutput { get; private set; }
 
-		public OneEuroFilter(in OneEuroFilterParameters parameters)
+		public OneEuroFilterInternal() : this(OneEuroParameters.Default) { }
+		public OneEuroFilterInternal(OneEuroParameters parameters)
 		{
-			_x = new LowPassFilter(GetAlpha(_minCutoff));
-			_dx = new LowPassFilter(GetAlpha(_derCutoff));
-
-			UpdateParameters(parameters);
-
+			_x = new LowPassFilter();
+			_dx = new LowPassFilter();
 			_lastTime = -1.0f;
+			
+			// Validate();
 
 			CurrentOutput = 0.0f;
-			PreviousOutput = CurrentOutput;
 		}
 
-		public void UpdateParameters(in OneEuroFilterParameters parameters)
+		public float Filter(in float input, in OneEuroParameters parameters)
 		{
-			_parameters = parameters;
-			_x.SetAlpha(GetAlpha(_minCutoff));
-			_dx.SetAlpha(GetAlpha(_derCutoff));
-			Validate();
-		}
-
-		public float Filter(float input, float? timestamp = null)
-		{
-			//Validate();
-
-			PreviousOutput = CurrentOutput;
-
-			// update the sampling frequency based on timestamps
-			if (_lastTime.HasValue && timestamp.HasValue)
-			{
-				_freq = 1.0f / (timestamp.Value - _lastTime.Value);
-			}
-			_lastTime = timestamp;
 			// estimate the current variation per second 
-			float dvalue = _x.IsInitialized ? ((input - _x.LastInput) * _freq) : 0;
-			float edvalue = _dx.FilterWithAlpha(dvalue, GetAlpha(_derCutoff));
+			float dvalue = _x.IsInitialized ? ((input - _x.LastInput) * parameters.Frequency) : 0;
+			float edvalue = _dx.Filter(dvalue, GetAlpha(parameters.DerivativeCutoff, parameters.Frequency));
 			// use it to update the cutoff frequency
-			float cutoff = _minCutoff + _b * Mathf.Abs(edvalue);
+			float cutoff = parameters.MinCutoff + parameters.Beta * Mathf.Abs(edvalue);
 			// filter the given value
-			CurrentOutput = _x.FilterWithAlpha(input, GetAlpha(cutoff));
+			CurrentOutput = _x.Filter(input, GetAlpha(cutoff, parameters.Frequency));
 
 			return CurrentOutput;
 		}
 
-		private void Validate()
+		private static float GetAlpha(float cutoff, float frequency)
 		{
-			if (_freq <= 0)
-			{
-				Debug.LogError("Frequency must be greater than 0.");
-				_freq = 0;
-			}
-			if (_minCutoff <= 0)
-			{
-				Debug.LogError("MinCutoff must be greater than 0.");
-				_minCutoff = float.Epsilon;
-			}
-			_x.SetAlpha(GetAlpha(_minCutoff));
-			_dx.SetAlpha(GetAlpha(_derCutoff));
-		}
-
-		private float GetAlpha(float cutoff)
-		{
-			float te = 1.0f / _freq;
-			float tau = 1.0f / (2.0f * Mathf.PI * cutoff);
+			var te = 1.0f / frequency;
+			var tau = 1.0f / (2.0f * Mathf.PI * cutoff);
 			return 1.0f / (1.0f + tau / te);
 		}
 	};
